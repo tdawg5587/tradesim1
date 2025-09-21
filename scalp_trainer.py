@@ -94,7 +94,8 @@ class TradeScalpTrainer:
         
         # Performance tracking
         self.total_breakouts = 0
-        self.successful_entries = 0
+        self.total_trades = 0
+        self.successful_trades = 0
         self.average_reaction_time = 0
         
         # Chart settings
@@ -132,6 +133,9 @@ class TradeScalpTrainer:
         
         # Pause/Resume: Space
         keyboard.add_hotkey('space', self.toggle_pause)
+        
+        # Reset statistics: Shift + R
+        keyboard.add_hotkey('shift+r', self.reset_statistics)
     
     def candle_generation_loop(self):
         """Generate new candles every few seconds"""
@@ -148,9 +152,8 @@ class TradeScalpTrainer:
                 # Check for breakout
                 self.check_for_breakout()
                 
-                # Reset trade state for new candle
+                # Update candle timing (but don't reset trade state)
                 self.current_candle_start_time = time.time()
-                self.trade_entered = False
     
     def check_for_breakout(self):
         """Check if current candle breaks previous candle's high"""
@@ -180,7 +183,6 @@ class TradeScalpTrainer:
             if self.breakout_time:
                 reaction_time = (self.trade_entry_time - self.breakout_time) * 1000  # Convert to ms
                 self.reaction_times.append(reaction_time)
-                self.successful_entries += 1
                 self.average_reaction_time = sum(self.reaction_times) / len(self.reaction_times)
                 
                 print(f"Trade entered ({trade_type})! Reaction time: {reaction_time:.0f}ms")
@@ -199,6 +201,10 @@ class TradeScalpTrainer:
     def exit_trade(self, exit_type: str):
         """Handle trade exit"""
         if self.trade_entered:
+            self.total_trades += 1
+            if exit_type == 'profit':
+                self.successful_trades += 1
+            
             print(f"Trade exited: {exit_type}")
             self.trade_entered = False
             self.trade_entry_price = None
@@ -207,6 +213,15 @@ class TradeScalpTrainer:
         """Toggle pause state"""
         self.paused = not self.paused
         print(f"Game {'paused' if self.paused else 'resumed'}")
+    
+    def reset_statistics(self):
+        """Reset all performance statistics"""
+        self.total_breakouts = 0
+        self.total_trades = 0
+        self.successful_trades = 0
+        self.average_reaction_time = 0
+        self.reaction_times = []
+        print("Statistics reset! Starting fresh.")
     
     def draw_candlestick(self, x: int, y: int, width: int, height: int, candle: dict):
         """Draw a single candlestick"""
@@ -320,14 +335,16 @@ class TradeScalpTrainer:
         # Statistics
         stats_text = [
             f"Total Breakouts: {self.total_breakouts}",
-            f"Successful Entries: {self.successful_entries}",
-            f"Success Rate: {(self.successful_entries/max(1,self.total_breakouts)*100):.1f}%",
+            f"Total Trades: {self.total_trades}",
+            f"Profitable Trades: {self.successful_trades}",
+            f"Success Rate: {(self.successful_trades/max(1,self.total_trades)*100):.1f}%",
             f"Avg Reaction Time: {self.average_reaction_time:.0f}ms",
             "",
             "CONTROLS:",
             "Shift+A/S/D - Enter Trade",
             "Shift+F - Cancel Trade", 
             "Shift+J/K/L - Exit Trade",
+            "Shift+R - Reset Stats",
             "Space - Pause/Resume",
             "",
             f"Status: {'PAUSED' if self.paused else 'RUNNING'}",
@@ -381,6 +398,7 @@ if __name__ == "__main__":
     print("  Shift+A/S/D - Enter different types of trades")
     print("  Shift+F - Cancel trade setup")
     print("  Shift+J/K/L - Exit trades (profit/loss/breakeven)")
+    print("  Shift+R - Reset statistics")
     print("  Space - Pause/Resume")
     print("\nWatch for candles that break the previous candle's high!")
     print("Enter trades as quickly as possible when breakouts occur.")
