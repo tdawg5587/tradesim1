@@ -95,8 +95,10 @@ class TradeScalpTrainer:
         # Performance tracking
         self.total_breakouts = 0
         self.total_trades = 0
-        self.successful_trades = 0
+        self.successful_trades = 0  # Based on exit button pressed
+        self.score_wins = 0  # Based on actual price movement (+1 score)
         self.average_reaction_time = 0
+        self.cumulative_score = 0  # Running score based on trade outcomes
         
         # Chart settings
         self.chart_x = 50
@@ -136,6 +138,9 @@ class TradeScalpTrainer:
         
         # Reset statistics: Shift + R
         keyboard.add_hotkey('shift+r', self.reset_statistics)
+        
+        # Exit application: Escape
+        keyboard.add_hotkey('esc', self.exit_application)
     
     def candle_generation_loop(self):
         """Generate new candles every few seconds"""
@@ -200,12 +205,36 @@ class TradeScalpTrainer:
     
     def exit_trade(self, exit_type: str):
         """Handle trade exit"""
-        if self.trade_entered:
+        if self.trade_entered and self.trade_entry_price and self.candles_display:
             self.total_trades += 1
+            current_price = self.candles_display[-1]['close']
+            
+            # Calculate score based on trade outcome relative to entry price
             if exit_type == 'profit':
                 self.successful_trades += 1
+                if current_price > self.trade_entry_price:
+                    self.cumulative_score += 1
+                    self.score_wins += 1
+                    score_change = "+1"
+                elif current_price < self.trade_entry_price:
+                    self.cumulative_score -= 1
+                    score_change = "-1"
+                else:
+                    score_change = "0"
+            elif exit_type == 'loss':
+                if current_price < self.trade_entry_price:
+                    self.cumulative_score -= 1
+                    score_change = "-1"
+                elif current_price > self.trade_entry_price:
+                    self.cumulative_score += 1
+                    self.score_wins += 1
+                    score_change = "+1"
+                else:
+                    score_change = "0"
+            else:  # breakeven
+                score_change = "0"
             
-            print(f"Trade exited: {exit_type}")
+            print(f"Trade exited: {exit_type} | Entry: {self.trade_entry_price:.2f} | Exit: {current_price:.2f} | Score: {score_change} | Total: {self.cumulative_score}")
             self.trade_entered = False
             self.trade_entry_price = None
     
@@ -219,9 +248,16 @@ class TradeScalpTrainer:
         self.total_breakouts = 0
         self.total_trades = 0
         self.successful_trades = 0
+        self.score_wins = 0
         self.average_reaction_time = 0
+        self.cumulative_score = 0
         self.reaction_times = []
         print("Statistics reset! Starting fresh.")
+    
+    def exit_application(self):
+        """Exit the application cleanly"""
+        print(f"Exiting application... Final Score: {self.cumulative_score}")
+        self.running = False
     
     def draw_candlestick(self, x: int, y: int, width: int, height: int, candle: dict):
         """Draw a single candlestick"""
@@ -346,6 +382,7 @@ class TradeScalpTrainer:
             "Shift+J/K/L - Exit Trade",
             "Shift+R - Reset Stats",
             "Space - Pause/Resume",
+            "ESC - Exit Game",
             "",
             f"Status: {'PAUSED' if self.paused else 'RUNNING'}",
             f"Breakout: {'YES' if self.breakout_detected else 'NO'}",
@@ -354,9 +391,13 @@ class TradeScalpTrainer:
         
         for text in stats_text:
             if text:  # Skip empty lines
-                color = self.RED if text.startswith("Status: PAUSED") else self.BLACK
-                color = self.GREEN if text.startswith("Breakout: YES") else color
-                color = self.BLUE if text.startswith("In Trade: YES") else color
+                color = self.BLACK
+                if text.startswith("Status: PAUSED"):
+                    color = self.RED
+                elif text.startswith("Breakout: YES"):
+                    color = self.BLACK
+                elif text.startswith("In Trade: YES"):
+                    color = self.BLUE
                 
                 rendered_text = self.font_small.render(text, True, color)
                 self.screen.blit(rendered_text, (hud_x, y_offset))
@@ -368,6 +409,13 @@ class TradeScalpTrainer:
             price_text = f"Current: O:{current['open']} H:{current['high']} L:{current['low']} C:{current['close']}"
             price_surface = self.font_medium.render(price_text, True, self.BLACK)
             self.screen.blit(price_surface, (self.chart_x, self.chart_y + self.chart_height + 20))
+            
+            # Score summary row at bottom
+            score_sign = "+" if self.cumulative_score > 0 else ""
+            win_rate = (self.score_wins/max(1,self.total_trades)*100) if self.total_trades > 0 else 0
+            bottom_text = f"Score: {score_sign}{self.cumulative_score} | Total: {self.total_trades} | Percent: {win_rate:.0f}%"
+            bottom_surface = self.font_small.render(bottom_text, True, self.BLACK)
+            self.screen.blit(bottom_surface, (self.chart_x, self.chart_y + self.chart_height + 55))
     
     def run(self):
         """Main game loop"""
@@ -400,6 +448,7 @@ if __name__ == "__main__":
     print("  Shift+J/K/L - Exit trades (profit/loss/breakeven)")
     print("  Shift+R - Reset statistics")
     print("  Space - Pause/Resume")
+    print("  ESC - Exit application")
     print("\nWatch for candles that break the previous candle's high!")
     print("Enter trades as quickly as possible when breakouts occur.")
     
