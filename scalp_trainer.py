@@ -89,6 +89,7 @@ class TradeScalpTrainer:
         self.breakout_time = None
         self.trade_entered = False
         self.trade_entry_time = None
+        self.trade_entry_price = None
         self.reaction_times = []
         
         # Performance tracking
@@ -101,6 +102,7 @@ class TradeScalpTrainer:
         self.chart_y = 50
         self.chart_width = 800
         self.chart_height = 400
+        self.chart_padding = 20  # Padding for candlesticks at edges
         
         # Generate initial candles
         for _ in range(self.max_candles_display):
@@ -171,6 +173,10 @@ class TradeScalpTrainer:
             self.trade_entered = True
             self.trade_entry_time = time.time()
             
+            # Set trade entry price to current candle's close
+            if self.candles_display:
+                self.trade_entry_price = self.candles_display[-1]['close']
+            
             if self.breakout_time:
                 reaction_time = (self.trade_entry_time - self.breakout_time) * 1000  # Convert to ms
                 self.reaction_times.append(reaction_time)
@@ -186,6 +192,7 @@ class TradeScalpTrainer:
     def cancel_trade(self):
         """Cancel current trade setup"""
         self.trade_entered = False
+        self.trade_entry_price = None
         self.breakout_detected = False
         print("Trade cancelled!")
     
@@ -194,6 +201,7 @@ class TradeScalpTrainer:
         if self.trade_entered:
             print(f"Trade exited: {exit_type}")
             self.trade_entered = False
+            self.trade_entry_price = None
     
     def toggle_pause(self):
         """Toggle pause state"""
@@ -210,18 +218,29 @@ class TradeScalpTrainer:
         # Determine color
         color = self.GREEN if close_price >= open_price else self.RED
         
-        # Calculate positions based on price range
+        # Calculate positions based on price range with padding
         if len(self.candles_display) > 1:
             all_highs = [c['high'] for c in self.candles_display]
             all_lows = [c['low'] for c in self.candles_display]
             price_range = max(all_highs) - min(all_lows)
             
             if price_range > 0:
-                # Scale prices to fit chart height
-                high_y = y + height - ((high_price - min(all_lows)) / price_range * height)
-                low_y = y + height - ((low_price - min(all_lows)) / price_range * height)
-                open_y = y + height - ((open_price - min(all_lows)) / price_range * height)
-                close_y = y + height - ((close_price - min(all_lows)) / price_range * height)
+                # Add padding to price range for better visualization
+                price_min = min(all_lows)
+                price_max = max(all_highs)
+                padding = price_range * 0.05  # 5% padding on top and bottom
+                
+                adjusted_min = price_min - padding
+                adjusted_max = price_max + padding
+                adjusted_range = adjusted_max - adjusted_min
+                
+                # Scale prices to fit chart height with padding
+                usable_height = height - (2 * self.chart_padding)
+                
+                high_y = y + self.chart_padding + usable_height - ((high_price - adjusted_min) / adjusted_range * usable_height)
+                low_y = y + self.chart_padding + usable_height - ((low_price - adjusted_min) / adjusted_range * usable_height)
+                open_y = y + self.chart_padding + usable_height - ((open_price - adjusted_min) / adjusted_range * usable_height)
+                close_y = y + self.chart_padding + usable_height - ((close_price - adjusted_min) / adjusted_range * usable_height)
                 
                 # Draw high-low line
                 pygame.draw.line(self.screen, color, (x + width//2, high_y), (x + width//2, low_y), 2)
@@ -239,17 +258,54 @@ class TradeScalpTrainer:
         pygame.draw.rect(self.screen, self.WHITE, (self.chart_x, self.chart_y, self.chart_width, self.chart_height))
         pygame.draw.rect(self.screen, self.BLACK, (self.chart_x, self.chart_y, self.chart_width, self.chart_height), 2)
         
-        # Draw candles
+        # Draw candles with proper spacing
         if self.candles_display:
-            candle_width = self.chart_width // len(self.candles_display)
+            candle_width = (self.chart_width - 2 * self.chart_padding) // len(self.candles_display)
             
             for i, candle in enumerate(self.candles_display):
-                x = self.chart_x + i * candle_width
+                x = self.chart_x + self.chart_padding + i * candle_width
                 self.draw_candlestick(x + 1, self.chart_y, candle_width - 2, self.chart_height, candle)
+        
+        # Draw trade entry line if in trade
+        if self.trade_entered and self.trade_entry_price and self.candles_display:
+            self.draw_trade_line()
         
         # Highlight if breakout is detected
         if self.breakout_detected:
             pygame.draw.rect(self.screen, self.BLUE, (self.chart_x, self.chart_y, self.chart_width, self.chart_height), 5)
+    
+    def draw_trade_line(self):
+        """Draw horizontal line showing trade entry price"""
+        if not self.trade_entry_price or not self.candles_display:
+            return
+            
+        # Calculate price range with same logic as candlesticks
+        all_highs = [c['high'] for c in self.candles_display]
+        all_lows = [c['low'] for c in self.candles_display]
+        price_range = max(all_highs) - min(all_lows)
+        
+        if price_range > 0:
+            # Add padding to price range for consistency
+            price_min = min(all_lows)
+            price_max = max(all_highs)
+            padding = price_range * 0.05
+            
+            adjusted_min = price_min - padding
+            adjusted_max = price_max + padding
+            adjusted_range = adjusted_max - adjusted_min
+            
+            # Calculate Y position for trade entry price
+            usable_height = self.chart_height - (2 * self.chart_padding)
+            trade_line_y = self.chart_y + self.chart_padding + usable_height - ((self.trade_entry_price - adjusted_min) / adjusted_range * usable_height)
+            
+            # Draw horizontal line across the chart
+            pygame.draw.line(self.screen, self.BLUE, 
+                           (self.chart_x, trade_line_y), 
+                           (self.chart_x + self.chart_width, trade_line_y), 3)
+            
+            # Draw price label
+            price_label = self.font_small.render(f"Entry: {self.trade_entry_price:.2f}", True, self.BLUE)
+            self.screen.blit(price_label, (self.chart_x + self.chart_width - 120, trade_line_y - 15))
     
     def draw_hud(self):
         """Draw heads-up display with stats and instructions"""
