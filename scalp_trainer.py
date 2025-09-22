@@ -227,20 +227,18 @@ class TradeScalpTrainer:
         self.running = True
         self.paused = False
         self.current_candle_start_time = None
-        self.breakout_detected = False
-        self.breakout_time = None
+        self.candle_break_time = None  # Time when high/low is broken
         self.trade_entered = False
         self.trade_entry_time = None
         self.trade_entry_price = None
-        self.reaction_times = []
+        self.trade_type = None  # 'long' or 'short'
         
         # Performance tracking
-        self.total_breakouts = 0
         self.total_trades = 0
-        self.successful_trades = 0  # Based on exit button pressed
-        self.score_wins = 0  # Based on actual price movement (+1 score)
-        self.average_reaction_time = 0
+        self.successful_trades = 0  # Based on actual price movement and trade type
         self.cumulative_score = 0  # Running score based on trade outcomes
+        self.current_trade_reaction_time = 0  # Individual trade reaction time
+        self.session_reaction_times = []  # All reaction times for the session
         
         # Chart settings
         self.chart_x = 70  # Moved right to make room for S/R labels
@@ -318,93 +316,95 @@ class TradeScalpTrainer:
                 current_volumes = [c.get('volume', 1000) for c in self.candles_display]
                 self.max_volume = max(current_volumes)
                 
-                # Check for breakout
-                self.check_for_breakout()
+                # Check for high/low breaks for timing purposes
+                self.check_for_high_low_break()
                 
                 # Update candle timing (but don't reset trade state)
                 self.current_candle_start_time = time.time()
     
-    def check_for_breakout(self):
-        """Check if current candle breaks previous candle's high"""
+    def check_for_high_low_break(self):
+        """Check if current candle breaks previous candle's high or low for timing"""
         if len(self.candles_display) < 2:
             return
             
         current_candle = self.candles_display[-1]
         previous_candle = self.candles_display[-2]
         
-        if current_candle['high'] > previous_candle['high']:
-            if not self.breakout_detected:
-                self.breakout_detected = True
-                self.breakout_time = time.time()
-                self.total_breakouts += 1
-                print(f"Breakout detected! Current high: {current_candle['high']}, Previous high: {previous_candle['high']}")
+        # Check for high or low break and record time
+        if (current_candle['high'] > previous_candle['high'] or 
+            current_candle['low'] < previous_candle['low']):
+            if not self.candle_break_time:
+                self.candle_break_time = time.time()
     
     def enter_trade(self, trade_type: str):
         """Handle trade entry"""
-        # In debug mode, always allow trades (except when already in trade)
         if not self.trade_entered:
             self.trade_entered = True
             self.trade_entry_time = time.time()
+            self.trade_type = trade_type
             
             # Set trade entry price to current candle's close
             if self.candles_display:
                 self.trade_entry_price = self.candles_display[-1]['close']
             
-            if self.breakout_time and not self.debug_mode:
-                reaction_time = (self.trade_entry_time - self.breakout_time) * 1000  # Convert to ms
-                self.reaction_times.append(reaction_time)
-                self.average_reaction_time = sum(self.reaction_times) / len(self.reaction_times)
+            # Calculate reaction time if there was a high/low break
+            if self.candle_break_time:
+                reaction_time = (self.trade_entry_time - self.candle_break_time) * 1000  # Convert to ms
+                self.current_trade_reaction_time = reaction_time
+                self.session_reaction_times.append(reaction_time)
                 print(f"Trade entered ({trade_type})! Reaction time: {reaction_time:.0f}ms")
             else:
+                self.current_trade_reaction_time = 0
                 print(f"Trade entered ({trade_type})! Entry price: {self.trade_entry_price:.2f}")
         else:
             print(f"Cannot enter trade - already in trade! Exit current trade first.")
-        
-        # Reset breakout for next opportunity
-        self.breakout_detected = False
-        self.breakout_time = None
     
     def cancel_trade(self):
         """Cancel current trade setup"""
         self.trade_entered = False
         self.trade_entry_price = None
-        self.breakout_detected = False
+        self.trade_type = None
+        self.candle_break_time = None
+        # Don't reset current_trade_reaction_time - it will persist until next trade
         print("Trade cancelled!")
     
     def exit_trade(self, exit_type: str):
         """Handle trade exit"""
-        if self.trade_entered and self.trade_entry_price and self.candles_display:
+        if self.trade_entered and self.trade_entry_price and self.candles_display and self.trade_type:
             self.total_trades += 1
             current_price = self.candles_display[-1]['close']
             
-            # Calculate score based on trade outcome relative to entry price
-            if exit_type == 'profit':
-                self.successful_trades += 1
-                if current_price > self.trade_entry_price:
-                    self.cumulative_score += 1
-                    self.score_wins += 1
-                    score_change = "+1"
-                elif current_price < self.trade_entry_price:
-                    self.cumulative_score -= 1
-                    score_change = "-1"
-                else:
-                    score_change = "0"
-            elif exit_type == 'loss':
-                if current_price < self.trade_entry_price:
-                    self.cumulative_score -= 1
-                    score_change = "-1"
-                elif current_price > self.trade_entry_price:
-                    self.cumulative_score += 1
-                    self.score_wins += 1
-                    score_change = "+1"
-                else:
-                    score_change = "0"
-            else:  # breakeven
-                score_change = "0"
+            # Determine if the trade was successful based on price movement and trade type
+            price_moved_up = current_price > self.trade_entry_price
+            price_moved_down = current_price < self.trade_entry_price
             
-            print(f"Trade exited: {exit_type} | Entry: {self.trade_entry_price:.2f} | Exit: {current_price:.2f} | Score: {score_change} | Total: {self.cumulative_score}")
+            trade_was_successful = False
+            if self.trade_type == 'long' and price_moved_up:
+                trade_was_successful = True
+            elif self.trade_type == 'short' and price_moved_down:
+                trade_was_successful = True
+            elif self.trade_type == 'breakout' and (price_moved_up or price_moved_down):
+                trade_was_successful = True
+                
+            # Calculate score based on actual trade success
+            if trade_was_successful:
+                self.successful_trades += 1
+                self.cumulative_score += 1
+                score_change = "+1"
+            elif current_price == self.trade_entry_price:
+                score_change = "0"  # No movement
+            else:
+                self.cumulative_score -= 1
+                score_change = "-1"
+            
+            print(f"Trade exited: {exit_type} | Type: {self.trade_type} | Entry: {self.trade_entry_price:.2f} | Exit: {current_price:.2f} | Score: {score_change} | Total: {self.cumulative_score}")
+            
+            # Reset trade state and timing (but keep current_trade_reaction_time for display)
             self.trade_entered = False
             self.trade_entry_price = None
+            self.trade_type = None
+            self.candle_break_time = None
+            # Don't reset current_trade_reaction_time - it will persist until next trade
     
     def toggle_pause(self):
         """Toggle pause state"""
@@ -413,13 +413,11 @@ class TradeScalpTrainer:
     
     def reset_statistics(self):
         """Reset all performance statistics"""
-        self.total_breakouts = 0
         self.total_trades = 0
         self.successful_trades = 0
-        self.score_wins = 0
-        self.average_reaction_time = 0
         self.cumulative_score = 0
-        self.reaction_times = []
+        self.current_trade_reaction_time = 0
+        self.session_reaction_times = []
         print("Statistics reset! Starting fresh.")
     
     def toggle_debug_mode(self):
@@ -500,10 +498,6 @@ class TradeScalpTrainer:
         # Draw trade entry line if in trade
         if self.trade_entered and self.trade_entry_price and self.candles_display:
             self.draw_trade_line()
-        
-        # Highlight if breakout is detected
-        if self.breakout_detected:
-            pygame.draw.rect(self.screen, self.BLUE, (self.chart_x, self.chart_y, self.chart_width, self.chart_height), 5)
     
     def draw_sr_levels(self):
         """Draw support and resistance levels"""
@@ -651,16 +645,20 @@ class TradeScalpTrainer:
         self.screen.blit(title, (hud_x, y_offset))
         y_offset += 60
         
+        # Calculate average session reaction time
+        avg_session_reaction = sum(self.session_reaction_times) / max(1, len(self.session_reaction_times)) if self.session_reaction_times else 0
+        
         # Statistics
         stats_text = [
-            f"Total Breakouts: {self.total_breakouts}",
             f"Total Trades: {self.total_trades}",
-            f"Profitable Trades: {self.successful_trades}",
+            f"Successful Trades: {self.successful_trades}",
             f"Success Rate: {(self.successful_trades/max(1,self.total_trades)*100):.1f}%",
-            f"Avg Reaction Time: {self.average_reaction_time:.0f}ms",
+            f"Score: {self.cumulative_score}",
             "",
             "CONTROLS:",
-            "Shift+A/S/D - Enter Trade",
+            "Shift+A - Long Trade",
+            "Shift+S - Short Trade",
+            "Shift+D - Breakout Trade",
             "Shift+F - Cancel Trade", 
             "Shift+J/K/L - Exit Trade",
             "Shift+R - Reset Stats",
@@ -670,8 +668,7 @@ class TradeScalpTrainer:
             "",
             f"Status: {'PAUSED' if self.paused else 'RUNNING'}",
             f"Debug Mode: {'ON' if self.debug_mode else 'OFF'}",
-            f"Breakout: {'YES' if self.breakout_detected else 'NO'}",
-            f"In Trade: {'YES' if self.trade_entered else 'NO'}"
+            f"In Trade: {'YES (' + self.trade_type + ')' if self.trade_entered else 'NO'}"
         ]
         
         for text in stats_text:
@@ -696,10 +693,12 @@ class TradeScalpTrainer:
             price_surface = self.font_medium.render(price_text, True, self.BLACK)
             self.screen.blit(price_surface, (self.chart_x, self.volume_y + self.volume_height + 20))
             
-            # Score summary row at bottom
+            # Score summary row at bottom with reaction time columns
             score_sign = "+" if self.cumulative_score > 0 else ""
-            win_rate = (self.score_wins/max(1,self.total_trades)*100) if self.total_trades > 0 else 0
-            bottom_text = f"Score: {score_sign}{self.cumulative_score} | Total: {self.total_trades} | Percent: {win_rate:.0f}%"
+            success_rate = (self.successful_trades/max(1,self.total_trades)*100) if self.total_trades > 0 else 0
+            avg_session_reaction = sum(self.session_reaction_times) / max(1, len(self.session_reaction_times)) if self.session_reaction_times else 0
+            
+            bottom_text = f"Score: {score_sign}{self.cumulative_score} | Total: {self.total_trades} | Success: {success_rate:.0f}% | Current RT: {self.current_trade_reaction_time:.0f}ms | Session Avg RT: {avg_session_reaction:.0f}ms"
             bottom_surface = self.font_small.render(bottom_text, True, self.BLACK)
             self.screen.blit(bottom_surface, (self.chart_x, self.volume_y + self.volume_height + 55))
     
